@@ -1,8 +1,64 @@
 
-const https = require('https');
+const http = require('http');
 const fs = require('fs');
-const pwPath = 'D:/Work/Tools/Node/npm-global/node_modules/@playwright/mcp/node_modules/playwright';
-const { chromium } = require(pwPath);
+const path = require('path');
+
+function resolvePlaywright() {
+  if (process.env.PLAYWRIGHT_PATH) {
+    try {
+      return require(process.env.PLAYWRIGHT_PATH);
+    } catch (e) {
+      console.warn('警告: 从 PLAYWRIGHT_PATH 加载失败:', e.message);
+    }
+  }
+
+  try {
+    return require('playwright');
+  } catch (e) {}
+
+  const fallbacks = [
+    'D:/Work/Tools/Node/npm-global/node_modules/@playwright/mcp/node_modules/playwright',
+    'D:/Work/Tools/Node/npm-global/node_modules/playwright',
+  ];
+  for (const fb of fallbacks) {
+    if (fs.existsSync(fb)) {
+      try {
+        return require(fb);
+      } catch (e) {}
+    }
+  }
+
+  throw new Error('未找到 playwright 模块。请运行 npm install playwright 或配置 PLAYWRIGHT_PATH / NODE_PATH 环境变量。');
+}
+
+const { chromium } = resolvePlaywright();
+
+function resolveChromiumExecutable() {
+  const envPath = process.env.CHROMIUM_PATH || process.env.CHROME_BIN || process.env.CHROME_PATH;
+  if (envPath && fs.existsSync(envPath)) {
+    return envPath;
+  }
+
+  const devFallback = 'D:/Work/Tools/BrowserMCP/Playwright/browsers/chromium-1243/chrome-win64/chrome.exe';
+  if (fs.existsSync(devFallback)) {
+    return devFallback;
+  }
+
+  const systemPaths = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+  ];
+  for (const sp of systemPaths) {
+    if (fs.existsSync(sp)) {
+      return sp;
+    }
+  }
+
+  return undefined;
+}
 
 const HTML_CONTENT = `<!DOCTYPE html>
 <html>
@@ -80,16 +136,23 @@ function generateHumanTrack(distance) {
 async function solveOnce(captchaId, port) {
   let browser;
   try {
-    browser = await chromium.launch({
-      executablePath: 'D:/Work/Tools/BrowserMCP/Playwright/browsers/chromium-1243/chrome-win64/chrome.exe',
+    const launchOptions = {
       headless: true,
       args: [
-        '--ignore-certificate-errors',
         '--disable-blink-features=AutomationControlled',
         '--no-sandbox',
-        '--disable-infobars'
+        '--disable-infobars',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
       ]
-    });
+    };
+
+    const execPath = resolveChromiumExecutable();
+    if (execPath) {
+      launchOptions.executablePath = execPath;
+    }
+
+    browser = await chromium.launch(launchOptions);
 
     const context = await browser.newContext({
       ignoreHTTPSErrors: true,
@@ -110,7 +173,7 @@ async function solveOnce(captchaId, port) {
       }
     });
 
-    await page.goto('https://127.0.0.1:' + port + '/', { waitUntil: 'networkidle' });
+    await page.goto('http://127.0.0.1:' + port + '/', { waitUntil: 'networkidle' });
     await page.evaluate((id) => window.initCaptcha(id), captchaId);
 
     await page.waitForFunction(() => window.gt4Ready === true, { timeout: 15000 });
@@ -298,11 +361,8 @@ async function solveOnce(captchaId, port) {
 }
 
 async function solveGeetestV4(captchaId, maxRetries = 3) {
-  const localGt4 = fs.readFileSync(require('path').join(__dirname, 'assets', 'gt4.js'));
-  const server = https.createServer({
-    key: fs.readFileSync(require('path').join(__dirname, 'certs', 'key.pem')),
-    cert: fs.readFileSync(require('path').join(__dirname, 'certs', 'cert.pem'))
-  }, (req, res) => {
+  const localGt4 = fs.readFileSync(path.join(__dirname, 'assets', 'gt4.js'));
+  const server = http.createServer((req, res) => {
     if (req.url === '/gt4.js') {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
       res.end(localGt4);
